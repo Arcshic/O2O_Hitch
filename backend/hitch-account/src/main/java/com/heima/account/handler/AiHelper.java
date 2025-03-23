@@ -54,8 +54,99 @@ public class AiHelper {
 
     * */
     public String getLicense(VehiclePO vehiclePO) throws IOException {
+        if (vehiclePO == null || vehiclePO.getCarFrontPhoto() == null || vehiclePO.getCarFrontPhoto() == null) {
+            throw new BusinessRuntimeException(BusinessErrors.DATA_NOT_EXIST, "Vehicle photo or license photo is missing.");
+        }
 
-        return "00000";
+        String vehicleImageUrl = vehiclePO.getCarFrontPhoto();   // URL of vehicle plate photo
+        String licenseImageUrl = vehiclePO.getCarBackPhoto();   // URL of license card photo
+
+        logger.info("Start recognizing vehicle info. Vehicle image: {}, License image: {}", vehicleImageUrl, licenseImageUrl);
+
+        String accessToken = getAccessToken();
+
+        String plateFromPhoto = recognizeLicensePlate(vehicleImageUrl, accessToken);
+        String plateFromLicense = recognizeVehicleLicense(licenseImageUrl, accessToken);
+
+        logger.info("License plate recognition result: photo={}, license={}", plateFromPhoto, plateFromLicense);
+        System.out.println(">>> DEBUG: plateFromPhoto=" + plateFromPhoto + ", plateFromLicense=" + plateFromLicense);
+
+        if (plateFromPhoto != null && plateFromPhoto.equalsIgnoreCase(plateFromLicense)) {
+            logger.info("License plate matched. Authentication passed: {}", plateFromPhoto);
+            return plateFromPhoto;
+        } else {
+            throw new BusinessRuntimeException(BusinessErrors.AUTHENTICATION_ERROR, "License plate mismatch. Authentication failed.");
+        }
+    }
+
+    private String getAccessToken() throws IOException {
+        String url = "https://aip.baidubce.com/oauth/2.0/token" +
+                "?grant_type=client_credentials" +
+                "&client_id=" + API_KEY +
+                "&client_secret=" + SECRET_KEY;
+
+        Request request = new Request.Builder().url(url).get().build();
+        try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) {
+                throw new IOException("Failed to obtain access token from Baidu OCR.");
+            }
+            String result = response.body().string();
+            JSONObject json = new JSONObject(result);
+            return json.getString("access_token");
+        }
+    }
+
+    private String recognizeLicensePlate(String imageUrl, String accessToken) throws IOException {
+        File imageFile = downloadImage(imageUrl);
+        String base64 = encodeToBase64(imageFile);
+        imageFile.delete();
+
+        String url = "https://aip.baidubce.com/rest/2.0/ocr/v1/license_plate?access_token=" + accessToken;
+
+        RequestBody body = new FormBody.Builder().add("image", base64).build();
+        Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Content-Type", "application/x-www-form-urlencoded")
+                .build();
+
+        try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+            String result = response.body().string();
+            JsonNode json = new ObjectMapper().readTree(result);
+            return json.path("words_result").path("number").asText(null);
+        }
+    }
+
+    private String recognizeVehicleLicense(String imageUrl, String accessToken) throws IOException {
+        File imageFile = downloadImage(imageUrl);
+        String base64 = encodeToBase64(imageFile);
+        imageFile.delete();
+
+        String url = "https://aip.baidubce.com/rest/2.0/ocr/v1/vehicle_license?access_token=" + accessToken;
+
+        RequestBody body = new FormBody.Builder().add("image", base64).build();
+        Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .addHeader("Content-Type", "application/x-www-form-urlencoded")
+                .build();
+
+        try (Response response = HTTP_CLIENT.newCall(request).execute()) {
+            String result = response.body().string();
+            JsonNode json = new ObjectMapper().readTree(result);
+            return json.path("words_result").path("号牌号码").path("words").asText(null);
+        }
+    }
+
+    private File downloadImage(String url) throws IOException {
+        File file = File.createTempFile("img_", ".jpg");
+        FileUtils.copyURLToFile(new URL(url), file);
+        return file;
+    }
+
+    private String encodeToBase64(File file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file.toPath());
+        return Base64.getEncoder().encodeToString(bytes);
     }
 
 }
